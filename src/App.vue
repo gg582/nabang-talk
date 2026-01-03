@@ -1,177 +1,213 @@
 <template>
-  <div class="page">
-    <header class="hero">
-      <div>
-        <p class="eyebrow">NabangTalk · 나방톡</p>
-        <h1>Chatter BBS JSON API Web Client</h1>
-        <p class="subtitle">
-          Connect through the TCP-to-WebSocket bridge and chat in a cute, cozy room.
-        </p>
-      </div>
-      <div class="hero-card">
-        <h2>Connection</h2>
-        <label class="field">
-          <span>WebSocket URL</span>
-          <input
-            v-model="wsUrl"
-            type="text"
-            placeholder="ws://localhost:5174"
-          />
-        </label>
-        <div class="row">
-          <button class="primary" :disabled="isConnected" @click="connect">
-            Connect
-          </button>
-          <button class="ghost" :disabled="!isConnected" @click="disconnect">
-            Disconnect
-          </button>
+  <div class="app">
+    <header class="top-bar">
+      <div class="brand">
+        <span class="dot" aria-hidden="true"></span>
+        <div>
+          <p class="eyebrow">NabangTalk · 나방톡</p>
+          <h1>Chatter BBS Chat Room</h1>
         </div>
-        <p class="hint">
-          Use <code>npm run proxy</code> to bridge TCP → WebSocket for the
-          JSON line API.
-        </p>
-        <p class="status" :class="{ live: isConnected }">
-          {{ isConnected ? 'Connected' : 'Disconnected' }}
-        </p>
+      </div>
+      <div class="status-chip" :class="{ live: isConnected }">
+        <span class="status-dot"></span>
+        {{ isConnected ? 'Connected' : 'Disconnected' }}
       </div>
     </header>
 
-    <main class="main">
-      <section class="panel">
-        <div class="panel-header">
-          <h2>Compose</h2>
-          <p>Send chat, media, poll, vote, or ASCII art payloads.</p>
+    <main class="layout">
+      <section class="chat-panel">
+        <div class="chat-header">
+          <div>
+            <h2>Room Feed</h2>
+            <p>Incoming and outgoing chats, styled like a real messenger.</p>
+          </div>
+          <div class="header-actions">
+            <button class="ghost" :disabled="isConnected" @click="connect">Connect</button>
+            <button class="ghost" :disabled="!isConnected" @click="disconnect">Disconnect</button>
+          </div>
         </div>
-        <div class="panel-body">
-          <label class="field">
-            <span>Username</span>
-            <input v-model="username" type="text" placeholder="moe-user" />
-          </label>
 
-          <label class="field">
-            <span>Message type</span>
-            <select v-model="messageType">
-              <option value="chat">Chat</option>
-              <option value="image">Image</option>
-              <option value="video">Video</option>
-              <option value="audio">Audio</option>
-              <option value="files">Files</option>
-              <option value="asciiart">ASCII Art</option>
-              <option value="poll">Poll (create)</option>
-              <option value="poll-vote">Poll (vote)</option>
-              <option value="vote">Vote (create)</option>
-              <option value="vote-vote">Vote (vote)</option>
-            </select>
-          </label>
+        <div class="chat-body">
+          <div v-if="chatMessages.length === 0" class="empty">
+            아직 아무 말도 없어요. Connect 후 첫 메시지를 보내보세요!
+          </div>
+          <ol class="chat-list">
+            <li
+              v-for="entry in chatMessages"
+              :key="entry.localId"
+              class="chat-item"
+              :class="entry.direction"
+            >
+              <div class="avatar" aria-hidden="true">
+                {{ entry.initials }}
+              </div>
+              <div class="bubble-wrap">
+                <div class="bubble-meta">
+                  <span class="name">{{ entry.username }}</span>
+                  <span class="time">{{ entry.time }}</span>
+                </div>
+                <div class="bubble" :class="entry.kind">
+                  <p v-if="entry.kind === 'text'">{{ entry.content }}</p>
+                  <pre v-else-if="entry.kind === 'asciiart'">{{ entry.content }}</pre>
+                  <div v-else-if="entry.kind === 'media'" class="media">
+                    <p class="media-label">{{ entry.mediaType }}</p>
+                    <a :href="entry.url" target="_blank" rel="noreferrer">{{ entry.url }}</a>
+                    <p v-if="entry.caption" class="caption">{{ entry.caption }}</p>
+                  </div>
+                  <div v-else-if="entry.kind === 'poll'" class="poll">
+                    <p class="poll-title">{{ entry.content }}</p>
+                    <ol>
+                      <li v-for="(option, index) in entry.options" :key="index">
+                        {{ option }}
+                      </li>
+                    </ol>
+                  </div>
+                  <div v-else-if="entry.kind === 'vote'" class="poll">
+                    <p class="poll-title">{{ entry.content }}</p>
+                    <p class="vote-meta">{{ entry.meta }}</p>
+                  </div>
+                  <p v-else class="system">{{ entry.content }}</p>
+                </div>
+                <details class="payload" v-if="entry.raw">
+                  <summary>JSON</summary>
+                  <pre>{{ entry.raw }}</pre>
+                </details>
+              </div>
+            </li>
+          </ol>
+        </div>
 
-          <template v-if="messageType === 'chat'">
+        <form class="composer" @submit.prevent="sendMessage">
+          <div class="composer-row">
             <label class="field">
+              <span>Username</span>
+              <input v-model="username" type="text" placeholder="moe-user" />
+            </label>
+            <label class="field">
+              <span>Message type</span>
+              <select v-model="messageType">
+                <option value="chat">Chat</option>
+                <option value="image">Image</option>
+                <option value="video">Video</option>
+                <option value="audio">Audio</option>
+                <option value="files">Files</option>
+                <option value="asciiart">ASCII Art</option>
+                <option value="poll">Poll (create)</option>
+                <option value="poll-vote">Poll (vote)</option>
+                <option value="vote">Vote (create)</option>
+                <option value="vote-vote">Vote (vote)</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="composer-grid">
+            <label v-if="messageType === 'chat'" class="field full">
               <span>Message</span>
-              <textarea v-model="message" rows="3" placeholder="Say hello ✨" />
+              <textarea v-model="message" rows="2" placeholder="카톡 느낌으로 톡 ✨" />
             </label>
-          </template>
 
-          <template v-if="['image', 'video', 'audio', 'files'].includes(messageType)">
-            <label class="field">
-              <span>URL</span>
-              <input v-model="mediaUrl" type="text" placeholder="https://..." />
-            </label>
-            <label class="field">
-              <span>Caption</span>
-              <input v-model="caption" type="text" placeholder="Optional caption" />
-            </label>
-          </template>
+            <template v-if="['image', 'video', 'audio', 'files'].includes(messageType)">
+              <label class="field">
+                <span>URL</span>
+                <input v-model="mediaUrl" type="text" placeholder="https://..." />
+              </label>
+              <label class="field">
+                <span>Caption</span>
+                <input v-model="caption" type="text" placeholder="Optional caption" />
+              </label>
+            </template>
 
-          <template v-if="messageType === 'asciiart'">
-            <label class="field">
+            <label v-if="messageType === 'asciiart'" class="field full">
               <span>ASCII Art</span>
               <textarea
                 v-model="asciiArt"
-                rows="5"
+                rows="4"
                 placeholder=" /\_/\\\n( o.o )\n > ^ <"
               />
             </label>
-          </template>
 
-          <template v-if="messageType === 'poll'">
-            <label class="field">
-              <span>Question</span>
-              <input v-model="pollQuestion" type="text" placeholder="Favorite snack?" />
-            </label>
-            <label class="field">
-              <span>Options (comma-separated)</span>
-              <input v-model="pollOptions" type="text" placeholder="cake, cookie, tea" />
-            </label>
-            <label class="checkbox">
-              <input type="checkbox" v-model="pollOperator" />
-              <span>Send as operator</span>
-            </label>
-          </template>
+            <template v-if="messageType === 'poll'">
+              <label class="field">
+                <span>Question</span>
+                <input v-model="pollQuestion" type="text" placeholder="Favorite snack?" />
+              </label>
+              <label class="field">
+                <span>Options (comma-separated)</span>
+                <input v-model="pollOptions" type="text" placeholder="cake, cookie, tea" />
+              </label>
+              <label class="checkbox full">
+                <input type="checkbox" v-model="pollOperator" />
+                <span>Send as operator</span>
+              </label>
+            </template>
 
-          <template v-if="messageType === 'poll-vote'">
-            <label class="field">
-              <span>Choice index</span>
-              <input v-model.number="pollChoice" type="number" min="1" />
-            </label>
-          </template>
+            <template v-if="messageType === 'poll-vote'">
+              <label class="field">
+                <span>Choice index</span>
+                <input v-model.number="pollChoice" type="number" min="1" />
+              </label>
+            </template>
 
-          <template v-if="messageType === 'vote'">
-            <label class="field">
-              <span>Label</span>
-              <input v-model="voteLabel" type="text" placeholder="weekend" />
-            </label>
-            <label class="field">
-              <span>Question</span>
-              <input v-model="voteQuestion" type="text" placeholder="Plan?" />
-            </label>
-            <label class="field">
-              <span>Options (comma-separated)</span>
-              <input v-model="voteOptions" type="text" placeholder="hike, rest" />
-            </label>
-            <label class="checkbox">
-              <input type="checkbox" v-model="voteAllowMultiple" />
-              <span>Allow multiple choice</span>
-            </label>
-          </template>
+            <template v-if="messageType === 'vote'">
+              <label class="field">
+                <span>Label</span>
+                <input v-model="voteLabel" type="text" placeholder="weekend" />
+              </label>
+              <label class="field">
+                <span>Question</span>
+                <input v-model="voteQuestion" type="text" placeholder="Plan?" />
+              </label>
+              <label class="field">
+                <span>Options (comma-separated)</span>
+                <input v-model="voteOptions" type="text" placeholder="hike, rest" />
+              </label>
+              <label class="checkbox full">
+                <input type="checkbox" v-model="voteAllowMultiple" />
+                <span>Allow multiple choice</span>
+              </label>
+            </template>
 
-          <template v-if="messageType === 'vote-vote'">
-            <label class="field">
-              <span>Label</span>
-              <input v-model="voteLabel" type="text" placeholder="weekend" />
-            </label>
-            <label class="field">
-              <span>Choice index</span>
-              <input v-model.number="voteChoice" type="number" min="1" />
-            </label>
-          </template>
+            <template v-if="messageType === 'vote-vote'">
+              <label class="field">
+                <span>Label</span>
+                <input v-model="voteLabel" type="text" placeholder="weekend" />
+              </label>
+              <label class="field">
+                <span>Choice index</span>
+                <input v-model.number="voteChoice" type="number" min="1" />
+              </label>
+            </template>
+          </div>
 
-          <button class="primary" :disabled="!isConnected" @click="sendMessage">
-            Send
-          </button>
-        </div>
+          <div class="composer-actions">
+            <button class="primary" :disabled="!isConnected" type="submit">Send</button>
+          </div>
+        </form>
       </section>
 
-      <section class="panel">
-        <div class="panel-header">
-          <h2>Room Feed</h2>
-          <p>Incoming events and responses from the server.</p>
+      <aside class="side-panel">
+        <div class="panel-card">
+          <h3>Connection</h3>
+          <label class="field">
+            <span>WebSocket URL</span>
+            <input v-model="wsUrl" type="text" placeholder="ws://localhost:5174" />
+          </label>
+          <p class="hint">
+            Run <code>npm run proxy</code> to bridge TCP → WebSocket for the JSON line API.
+          </p>
         </div>
-        <div class="panel-body">
-          <div v-if="messages.length === 0" class="empty">
-            No messages yet. Connect and send your first payload!
-          </div>
-          <ul class="feed">
-            <li v-for="entry in messages" :key="entry.localId" class="feed-item">
-              <div class="feed-meta">
-                <span class="badge" :class="entry.direction">{{ entry.direction }}</span>
-                <span class="timestamp">{{ entry.time }}</span>
-              </div>
-              <div class="feed-title">{{ entry.title }}</div>
-              <pre class="feed-body">{{ entry.body }}</pre>
+        <div class="panel-card">
+          <h3>Activity</h3>
+          <ul class="activity">
+            <li v-for="entry in activity" :key="entry.localId">
+              <span class="time">{{ entry.time }}</span>
+              <span class="label">{{ entry.title }}</span>
+              <p>{{ entry.body }}</p>
             </li>
           </ul>
+          <p v-if="activity.length === 0" class="hint">No events yet.</p>
         </div>
-      </section>
+      </aside>
     </main>
   </div>
 </template>
@@ -197,7 +233,8 @@ const voteAllowMultiple = ref(true);
 const voteChoice = ref(1);
 
 const socket = ref(null);
-const messages = ref([]);
+const chatMessages = ref([]);
+const activity = ref([]);
 const nextId = ref(1);
 const localId = ref(1);
 
@@ -211,13 +248,16 @@ const connect = () => {
   const ws = new WebSocket(wsUrl.value);
   ws.addEventListener('open', () => {
     socket.value = ws;
-    pushMessage('system', 'Connected', 'WebSocket connection is live.');
+    logActivity('Connected', 'WebSocket connection is live.');
+    addSystemMessage('Connected to the room.');
   });
   ws.addEventListener('close', () => {
-    pushMessage('system', 'Disconnected', 'WebSocket connection closed.');
+    logActivity('Disconnected', 'WebSocket connection closed.');
+    addSystemMessage('Connection closed.');
   });
   ws.addEventListener('error', () => {
-    pushMessage('system', 'Error', 'Failed to connect. Check the bridge URL.');
+    logActivity('Error', 'Failed to connect. Check the bridge URL.');
+    addSystemMessage('Failed to connect.');
   });
   ws.addEventListener('message', (event) => {
     const text = String(event.data || '');
@@ -238,22 +278,22 @@ const disconnect = () => {
 const handleIncoming = (line) => {
   try {
     const payload = JSON.parse(line);
-    const title = `${payload.type ?? 'event'}: ${payload.event ?? payload.status ?? 'update'}`;
-    pushMessage('incoming', title, JSON.stringify(payload, null, 2));
+    addIncomingMessage(payload);
   } catch (error) {
-    pushMessage('incoming', 'raw', line);
+    addSystemMessage(line);
   }
 };
 
 const sendMessage = () => {
   if (!socket.value || socket.value.readyState !== WebSocket.OPEN) {
-    pushMessage('system', 'Not connected', 'Connect before sending.');
+    logActivity('Not connected', 'Connect before sending.');
+    addSystemMessage('Connect before sending.');
     return;
   }
 
   const payload = buildPayload();
   socket.value.send(JSON.stringify(payload));
-  pushMessage('outgoing', `sent: ${payload.type}`, JSON.stringify(payload, null, 2));
+  addOutgoingMessage(payload);
 };
 
 const buildPayload = () => {
@@ -325,10 +365,116 @@ const splitOptions = (value) =>
     .map((option) => option.trim())
     .filter(Boolean);
 
-const pushMessage = (direction, title, body) => {
-  messages.value.unshift({
+const addIncomingMessage = (payload) => {
+  const normalized = normalizePayload(payload);
+  chatMessages.value.push({
     localId: localId.value++,
-    direction,
+    direction: 'incoming',
+    ...normalized
+  });
+  logActivity(`Incoming ${normalized.kind}`, normalized.summary || 'New message');
+};
+
+const addOutgoingMessage = (payload) => {
+  const normalized = normalizePayload(payload, true);
+  chatMessages.value.push({
+    localId: localId.value++,
+    direction: 'outgoing',
+    ...normalized
+  });
+  logActivity(`Sent ${normalized.kind}`, normalized.summary || 'Message sent');
+};
+
+const addSystemMessage = (messageText) => {
+  chatMessages.value.push({
+    localId: localId.value++,
+    direction: 'system',
+    username: 'System',
+    initials: '⚙️',
+    time: new Date().toLocaleTimeString(),
+    kind: 'system',
+    content: messageText
+  });
+};
+
+const normalizePayload = (payload, isOutgoing = false) => {
+  const kind = payload.type || payload.event || 'system';
+  const usernameValue = payload.username || payload.user || (isOutgoing ? username.value : 'Anonymous');
+  const time = new Date().toLocaleTimeString();
+  const initials = String(usernameValue).slice(0, 2).toUpperCase();
+
+  if (kind === 'chat') {
+    return {
+      kind: 'text',
+      username: usernameValue,
+      initials,
+      time,
+      content: payload.message || payload.text || '',
+      raw: JSON.stringify(payload, null, 2)
+    };
+  }
+
+  if (kind === 'asciiart') {
+    return {
+      kind: 'asciiart',
+      username: usernameValue,
+      initials,
+      time,
+      content: payload.message || '',
+      raw: JSON.stringify(payload, null, 2)
+    };
+  }
+
+  if (['image', 'video', 'audio', 'files'].includes(kind)) {
+    return {
+      kind: 'media',
+      username: usernameValue,
+      initials,
+      time,
+      mediaType: kind,
+      url: payload.url || '',
+      caption: payload.caption || '',
+      raw: JSON.stringify(payload, null, 2)
+    };
+  }
+
+  if (kind === 'poll') {
+    return {
+      kind: 'poll',
+      username: usernameValue,
+      initials,
+      time,
+      content: payload.question || payload.title || 'Poll',
+      options: payload.options || [],
+      raw: JSON.stringify(payload, null, 2)
+    };
+  }
+
+  if (kind === 'vote') {
+    return {
+      kind: 'vote',
+      username: usernameValue,
+      initials,
+      time,
+      content: payload.question || payload.label || 'Vote',
+      meta: payload.action ? `Action: ${payload.action}` : 'Vote update',
+      raw: JSON.stringify(payload, null, 2)
+    };
+  }
+
+  return {
+    kind: 'system',
+    username: usernameValue,
+    initials,
+    time,
+    content: payload.message || payload.status || payload.event || 'Update',
+    raw: JSON.stringify(payload, null, 2)
+  };
+};
+
+const logActivity = (title, body) => {
+  activity.value.unshift({
+    localId: localId.value++,
     title,
     body,
     time: new Date().toLocaleTimeString()
@@ -342,7 +488,7 @@ const pushMessage = (direction, title, body) => {
   font-family: 'Nunito', 'Pretendard', 'Noto Sans KR', system-ui, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  background-color: #fff7f7;
+  background-color: #fff5f6;
   color: #3c2f34;
 }
 
@@ -352,22 +498,40 @@ const pushMessage = (direction, title, body) => {
 
 body {
   margin: 0;
-  background: #fff7f7;
+  background: #fff5f6;
 }
 
-.page {
+.app {
   min-height: 100vh;
-  padding: 32px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
 }
 
-.hero {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-  gap: 24px;
-  align-items: start;
+.top-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  background: #ffffff;
+  border: 1px solid #f3c8d1;
+  border-radius: 20px;
+  padding: 16px 20px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.dot {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: #f6a9b7;
+  display: inline-block;
 }
 
 .eyebrow {
@@ -375,92 +539,257 @@ body {
   letter-spacing: 0.12em;
   font-size: 0.75rem;
   color: #c06a7a;
-  margin-bottom: 8px;
+  margin: 0 0 4px 0;
 }
 
 h1 {
-  font-size: 2.3rem;
-  margin: 0 0 12px 0;
-}
-
-.subtitle {
+  font-size: 1.6rem;
   margin: 0;
-  color: #69525a;
 }
 
-.hero-card {
-  background: #ffffff;
-  border: 1px solid #f1c5cd;
-  border-radius: 20px;
-  padding: 20px;
-  box-shadow: 0 8px 20px rgba(240, 188, 198, 0.25);
-}
-
-.row {
-  display: flex;
-  gap: 12px;
-  margin-top: 12px;
-}
-
-.hint {
-  font-size: 0.85rem;
-  color: #8b6b73;
-  margin-top: 12px;
-}
-
-.status {
-  margin-top: 12px;
-  font-weight: 600;
-  color: #a07a83;
-}
-
-.status.live {
-  color: #c05a6a;
-}
-
-.main {
+.layout {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 24px;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  gap: 20px;
 }
 
-.panel {
+.chat-panel {
   background: #ffffff;
-  border-radius: 20px;
-  border: 1px solid #f4cdd3;
-  overflow: hidden;
+  border-radius: 24px;
+  border: 1px solid #f3c8d1;
   display: flex;
   flex-direction: column;
+  min-height: 70vh;
 }
 
-.panel-header {
+.chat-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
   padding: 20px;
   border-bottom: 1px solid #f6d7dc;
   background: #fff0f2;
 }
 
-.panel-header h2 {
+.chat-header h2 {
   margin: 0 0 6px 0;
 }
 
-.panel-header p {
+.chat-header p {
   margin: 0;
   color: #7b5f66;
 }
 
-.panel-body {
+.header-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: #fff0f2;
+  color: #c06a7a;
+  font-weight: 600;
+  border: 1px solid #f3c8d1;
+}
+
+.status-chip.live {
+  background: #f8d0d8;
+  color: #b05566;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.chat-body {
   padding: 20px;
+  flex: 1;
+  overflow-y: auto;
+  background: #fff7f8;
+}
+
+.chat-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
 
+.chat-item {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.chat-item.outgoing {
+  grid-template-columns: 1fr 40px;
+}
+
+.chat-item.outgoing .avatar {
+  order: 2;
+}
+
+.chat-item.outgoing .bubble-wrap {
+  order: 1;
+  align-items: flex-end;
+}
+
+.chat-item.system {
+  grid-template-columns: 1fr;
+}
+
+.chat-item.system .avatar {
+  display: none;
+}
+
+.avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: #f7c2cd;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  color: #ffffff;
+  font-size: 0.85rem;
+}
+
+.bubble-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bubble-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 0.75rem;
+  color: #7b5f66;
+}
+
+.bubble {
+  background: #ffffff;
+  border: 1px solid #f3c8d1;
+  border-radius: 16px;
+  padding: 12px 14px;
+  color: #3c2f34;
+}
+
+.chat-item.outgoing .bubble {
+  background: #f8d0d8;
+  border-color: #f3a9b8;
+}
+
+.chat-item.system .bubble {
+  background: #fff0f3;
+  text-align: center;
+}
+
+.bubble p {
+  margin: 0;
+}
+
+.bubble pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.85rem;
+}
+
+.media a {
+  color: #b05566;
+  text-decoration: none;
+}
+
+.caption {
+  margin-top: 6px;
+  color: #7b5f66;
+  font-size: 0.85rem;
+}
+
+.poll {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.poll-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.poll ol {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.vote-meta {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #7b5f66;
+}
+
+.payload {
+  font-size: 0.75rem;
+  color: #7b5f66;
+}
+
+.payload pre {
+  white-space: pre-wrap;
+  margin: 6px 0 0 0;
+  background: #fff7f8;
+  border-radius: 10px;
+  padding: 8px;
+}
+
+.composer {
+  border-top: 1px solid #f6d7dc;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: #ffffff;
+}
+
+.composer-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.composer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.composer-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .field {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  font-size: 0.9rem;
+  gap: 6px;
+  font-size: 0.85rem;
   color: #6c4e57;
+}
+
+.field.full {
+  grid-column: 1 / -1;
 }
 
 input,
@@ -482,30 +811,22 @@ textarea {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   color: #6c4e57;
 }
 
 button {
   border: none;
   border-radius: 14px;
-  padding: 12px 16px;
+  padding: 10px 16px;
   font-weight: 600;
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-}
-
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-  box-shadow: none;
-  transform: none;
+  transition: transform 0.2s ease;
 }
 
 button.primary {
   background: #f2a5b3;
   color: #ffffff;
-  box-shadow: 0 6px 12px rgba(242, 165, 179, 0.3);
 }
 
 button.ghost {
@@ -513,71 +834,73 @@ button.ghost {
   color: #c36b7b;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  transform: none;
+}
+
 button:not(:disabled):hover {
   transform: translateY(-1px);
 }
 
-.feed {
+.side-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.panel-card {
+  background: #ffffff;
+  border-radius: 20px;
+  border: 1px solid #f3c8d1;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.panel-card h3 {
+  margin: 0;
+}
+
+.hint {
+  font-size: 0.8rem;
+  color: #8b6b73;
+  margin: 0;
+}
+
+.activity {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  max-height: 520px;
-  overflow: auto;
+  gap: 12px;
 }
 
-.feed-item {
+.activity li {
   background: #fff6f7;
-  border-radius: 16px;
-  padding: 12px;
+  border-radius: 14px;
+  padding: 10px;
   border: 1px solid #f7d9de;
 }
 
-.feed-meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-  font-size: 0.8rem;
-  color: #7c5e66;
-}
-
-.badge {
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+.activity .time {
   font-size: 0.7rem;
+  color: #9a717b;
 }
 
-.badge.incoming {
-  background: #ffe0e6;
-  color: #b65a6c;
-}
-
-.badge.outgoing {
-  background: #f9c1cc;
-  color: #ffffff;
-}
-
-.badge.system {
-  background: #f3e4e8;
-  color: #8a6a73;
-}
-
-.feed-title {
+.activity .label {
   font-weight: 600;
-  margin-bottom: 8px;
-}
-
-.feed-body {
-  margin: 0;
-  white-space: pre-wrap;
   font-size: 0.85rem;
   color: #4a3640;
+}
+
+.activity p {
+  margin: 4px 0 0 0;
+  font-size: 0.8rem;
+  color: #6c4e57;
 }
 
 .empty {
@@ -588,9 +911,13 @@ button:not(:disabled):hover {
   border-radius: 16px;
 }
 
-@media (max-width: 900px) {
-  .hero {
+@media (max-width: 980px) {
+  .layout {
     grid-template-columns: 1fr;
+  }
+
+  .chat-panel {
+    min-height: auto;
   }
 }
 </style>
