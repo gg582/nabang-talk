@@ -252,10 +252,12 @@ const connect = () => {
     addSystemMessage('Connected to the room.');
   });
   ws.addEventListener('close', () => {
+    socket.value = null;
     logActivity('Disconnected', 'WebSocket connection closed.');
     addSystemMessage('Connection closed.');
   });
   ws.addEventListener('error', () => {
+    socket.value = null;
     logActivity('Error', 'Failed to connect. Check the bridge URL.');
     addSystemMessage('Failed to connect.');
   });
@@ -304,7 +306,17 @@ const buildPayload = () => {
   };
 
   if (messageType.value === 'chat') {
-    return { ...base, type: 'chat', message: message.value };
+    return {
+      ...base,
+      type: 'message',
+      message: message.value,
+      preserve_whitespace: false,
+      attachment: {
+        type: 'none',
+        target: '',
+        caption: ''
+      }
+    };
   }
 
   if (messageType.value === 'asciiart') {
@@ -366,7 +378,11 @@ const splitOptions = (value) =>
     .filter(Boolean);
 
 const addIncomingMessage = (payload) => {
-  const normalized = normalizePayload(payload);
+  const { data, eventType } = unwrapIncoming(payload);
+  const normalized = normalizePayload(data, false, {
+    eventType,
+    rawPayload: payload
+  });
   chatMessages.value.push({
     localId: localId.value++,
     direction: 'incoming',
@@ -376,7 +392,9 @@ const addIncomingMessage = (payload) => {
 };
 
 const addOutgoingMessage = (payload) => {
-  const normalized = normalizePayload(payload, true);
+  const normalized = normalizePayload(payload, true, {
+    rawPayload: payload
+  });
   chatMessages.value.push({
     localId: localId.value++,
     direction: 'outgoing',
@@ -397,20 +415,46 @@ const addSystemMessage = (messageText) => {
   });
 };
 
-const normalizePayload = (payload, isOutgoing = false) => {
-  const kind = payload.type || payload.event || 'system';
-  const usernameValue = payload.username || payload.user || (isOutgoing ? username.value : 'Anonymous');
-  const time = new Date().toLocaleTimeString();
-  const initials = String(usernameValue).slice(0, 2).toUpperCase();
+const unwrapIncoming = (payload) => {
+  if (payload?.type === 'event' && payload.payload) {
+    return {
+      data: payload.payload,
+      eventType: payload.event || payload.payload.type || 'event'
+    };
+  }
 
-  if (kind === 'chat') {
+  return { data: payload, eventType: payload?.type };
+};
+
+const normalizePayload = (payload, isOutgoing = false, meta = {}) => {
+  const kind = payload.type || meta.eventType || payload.event || 'system';
+  const usernameValue = payload.username || payload.user || (isOutgoing ? username.value : 'Anonymous');
+  const createdAt = payload.created_at ? new Date(payload.created_at * 1000) : new Date();
+  const time = createdAt.toLocaleTimeString();
+  const initials = String(usernameValue).slice(0, 2).toUpperCase();
+  const raw = JSON.stringify(meta.rawPayload ?? payload, null, 2);
+
+  if (kind === 'message' && payload.attachment?.type && payload.attachment.type !== 'none') {
+    return {
+      kind: 'media',
+      username: usernameValue,
+      initials,
+      time,
+      mediaType: payload.attachment.type,
+      url: payload.attachment.target || '',
+      caption: payload.attachment.caption || '',
+      raw
+    };
+  }
+
+  if (kind === 'chat' || kind === 'message') {
     return {
       kind: 'text',
       username: usernameValue,
       initials,
       time,
       content: payload.message || payload.text || '',
-      raw: JSON.stringify(payload, null, 2)
+      raw
     };
   }
 
@@ -421,7 +465,7 @@ const normalizePayload = (payload, isOutgoing = false) => {
       initials,
       time,
       content: payload.message || '',
-      raw: JSON.stringify(payload, null, 2)
+      raw
     };
   }
 
@@ -434,7 +478,7 @@ const normalizePayload = (payload, isOutgoing = false) => {
       mediaType: kind,
       url: payload.url || '',
       caption: payload.caption || '',
-      raw: JSON.stringify(payload, null, 2)
+      raw
     };
   }
 
@@ -446,7 +490,7 @@ const normalizePayload = (payload, isOutgoing = false) => {
       time,
       content: payload.question || payload.title || 'Poll',
       options: payload.options || [],
-      raw: JSON.stringify(payload, null, 2)
+      raw
     };
   }
 
@@ -458,7 +502,7 @@ const normalizePayload = (payload, isOutgoing = false) => {
       time,
       content: payload.question || payload.label || 'Vote',
       meta: payload.action ? `Action: ${payload.action}` : 'Vote update',
-      raw: JSON.stringify(payload, null, 2)
+      raw
     };
   }
 
@@ -468,7 +512,7 @@ const normalizePayload = (payload, isOutgoing = false) => {
     initials,
     time,
     content: payload.message || payload.status || payload.event || 'Update',
-    raw: JSON.stringify(payload, null, 2)
+    raw
   };
 };
 
