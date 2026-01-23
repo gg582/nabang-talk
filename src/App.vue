@@ -23,6 +23,7 @@
           </div>
           <div class="header-actions">
             <button class="ghost" :disabled="isConnected" @click="connect">Connect</button>
+            <button class="primary" v-if="isConnected && !isAuthenticated" @click="performLogin">Login</button>
             <button class="ghost" :disabled="!isConnected" @click="disconnect">Disconnect</button>
           </div>
         </div>
@@ -77,7 +78,10 @@
           </ol>
         </div>
 
-        <form class="composer" @submit.prevent="sendMessage">
+        <div v-if="isConnected && !isAuthenticated" class="login-prompt">
+           <p>Please login to chat (click Login in header).</p>
+        </div>
+        <form v-else class="composer" @submit.prevent="sendMessage">
           <div class="composer-row">
             <label class="field">
               <span>Username</span>
@@ -237,6 +241,8 @@ const chatMessages = ref([]);
 const activity = ref([]);
 const nextId = ref(1);
 const localId = ref(1);
+const token = ref('');
+const isAuthenticated = ref(false);
 
 const isConnected = computed(() => socket.value?.readyState === WebSocket.OPEN);
 
@@ -249,15 +255,18 @@ const connect = () => {
   ws.addEventListener('open', () => {
     socket.value = ws;
     logActivity('Connected', 'WebSocket connection is live.');
-    addSystemMessage('Connected to the room.');
+    addSystemMessage('Connected. Please log in.');
   });
   ws.addEventListener('close', () => {
     socket.value = null;
+    isAuthenticated.value = false;
+    token.value = '';
     logActivity('Disconnected', 'WebSocket connection closed.');
     addSystemMessage('Connection closed.');
   });
   ws.addEventListener('error', () => {
     socket.value = null;
+    isAuthenticated.value = false;
     logActivity('Error', 'Failed to connect. Check the bridge URL.');
     addSystemMessage('Failed to connect.');
   });
@@ -274,12 +283,48 @@ const disconnect = () => {
   if (socket.value) {
     socket.value.close();
     socket.value = null;
+    isAuthenticated.value = false;
+    token.value = '';
   }
+};
+
+const performLogin = () => {
+  if (!socket.value) return;
+  const id = nextId.value++;
+  const payload = {
+    id,
+    type: 'login',
+    username: username.value
+  };
+  socket.value.send(JSON.stringify(payload));
+  logActivity('Login', `Requesting token for ${username.value}...`);
 };
 
 const handleIncoming = (line) => {
   try {
     const payload = JSON.parse(line);
+    
+    // Intercept login/auth responses
+    if (payload.type === 'response') {
+      if (payload.result && payload.result.token) {
+        token.value = payload.result.token;
+        logActivity('Token Received', 'Authenticating...');
+        // Auto-auth
+        const authPayload = {
+          type: 'auth',
+          token: token.value
+        };
+        socket.value.send(JSON.stringify(authPayload));
+        return;
+      }
+      if (payload.message === 'Authenticated') {
+        isAuthenticated.value = true;
+        addSystemMessage(`Logged in as ${username.value}`);
+        logActivity('Authenticated', 'Session is valid.');
+        return;
+      }
+    }
+
     addIncomingMessage(payload);
   } catch (error) {
     addSystemMessage(line);
@@ -953,6 +998,14 @@ button:not(:disabled):hover {
   color: #8c6b73;
   background: #fff6f8;
   border-radius: 16px;
+}
+
+.login-prompt {
+  padding: 20px;
+  text-align: center;
+  color: #8c6b73;
+  background: #fff;
+  border-top: 1px solid #f6d7dc;
 }
 
 @media (max-width: 980px) {
